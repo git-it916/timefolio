@@ -1,5 +1,6 @@
 import time
 import sqlite3
+import os # [수정] os 모듈 추가 (폴더 생성을 위해)
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,12 +15,20 @@ from selenium.webdriver.common.action_chains import ActionChains
 LOGIN_URL = "https://hankyung.timefolio.net/"
 USER_ID = "shinshunghun0916@gmail.com"
 USER_PW = "Tlstmdgns1!"
-DB_NAME = "timefolio_data.db"
-RANKS_TO_SCRAPE = 3 # 상위 몇 위까지 스크랩할지 설정
+# [수정] DB 경로를 'database' 폴더 하위로 변경
+DB_NAME = os.path.join("database", "timefolio_data.db")
+RANKS_TO_SCRAPE = 20 # 상위 몇 위까지 스크랩할지 설정
 
 # --- 1. 데이터베이스 설정 ---
 def setup_database():
     """데이터베이스 파일과 테이블을 초기화하는 함수"""
+    
+    # [수정] DB 파일이 저장될 폴더가 없으면 생성
+    db_dir = os.path.dirname(DB_NAME)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+        print(f"'{db_dir}' 폴더가 생성되었습니다.")
+
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     cur.execute('''
@@ -38,6 +47,7 @@ def setup_database():
 def save_portfolio(conn, rank, user_nick, portfolio_data):
     """추출한 포트폴리오 데이터를 DB에 저장하는 함수"""
     cur = conn.cursor()
+    # 날짜와 시간을 모두 저장 (이미 적용되어 있음)
     today = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     for stock_name in portfolio_data:
@@ -79,7 +89,7 @@ def run_scraper():
         print("'대회' 탭으로 이동 완료.")
         time.sleep(3)
 
-        # --- 3. 1위부터 50위까지 순회 ---
+        # --- 3. 1위부터 20위까지 순회 ---
         for i in range(RANKS_TO_SCRAPE):
             current_rank = i + 1
             print(f"\n{current_rank}위 사용자 데이터 추출을 시작합니다...")
@@ -87,7 +97,6 @@ def run_scraper():
             try:
                 # stale element 오류를 피하기 위해 매번 랭킹 목록을 새로 찾음
                 ranking_table = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.datagrid")))
-                # [수정] style이 'position'으로 시작하는 tr(랭킹 행)만 선택
                 rows = ranking_table.find_elements(By.XPATH, ".//tbody/tr[starts-with(@style, 'position')]")
                 
                 if i >= len(rows):
@@ -115,25 +124,35 @@ def run_scraper():
                 print(f" - {current_rank}위 {user_nick}님의 'open' 버튼 클릭.")
                 
                 # 포트폴리오 모달(창)이 뜰 때까지 대기
-                # [수정] dialog 태그를 직접 가리키도록 선택자 수정
                 modal_selector = "dialog.dialog"
                 modal = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, modal_selector)))
                 print(" - 포트폴리오 창 확인.")
-                
-                # 모달 안의 '데이터 테이블'이 로드될 때까지 추가 대기
-                modal_table_body_selector = ".//div[contains(@class, 'datagrid')]//tbody"
-                wait.until(EC.presence_of_element_located((By.XPATH, modal_table_body_selector)))
-                print(" - 포트폴리오 데이터 로드 확인.")
 
+                # 팝업 창의 헤더(제목)가 현재 클릭한 사용자의 닉네임과 일치할 때까지 대기
+                modal_header_selector = (By.CSS_SELECTOR, "dialog.dialog header")
+                wait.until(EC.text_to_be_present_in_element(modal_header_selector, user_nick))
+                print(f" - 포트폴리오 헤더 '{user_nick}'님으로 변경 확인.")
+                
+                # [★ 버그 수정 ★]
+                # 닉네임이 바뀐 것을 확인했으므로, 불필요한 대기(wait.until)를 제거하고
+                # "전체 보유 종목" 테이블(두 번째 datagrid)을 'modal' 내부에서 즉시 찾습니다.
+                modal_table_body_selector = "(.//div[contains(@class, 'datagrid')])[2]//tbody"
+                
                 portfolio_data = []
                 stock_rows = modal.find_elements(By.XPATH, f"{modal_table_body_selector}/tr")
                 
+                # [수정] 만약 datagrid[2]에서 못 찾으면, datagrid[1]을 다시 시도 (안정성)
+                if not stock_rows:
+                    print("  - '전체 보유 종목' 테이블(datagrid[2])을 찾지 못했습니다. 'Top 10' 테이블(datagrid[1])을 시도합니다.")
+                    modal_table_body_selector = "(.//div[contains(@class, 'datagrid')])[1]//tbody"
+                    stock_rows = modal.find_elements(By.XPATH, f"{modal_table_body_selector}/tr")
+
+                
                 for stock_row in stock_rows:
                     cols = stock_row.find_elements(By.TAG_NAME, "td")
-                    # 두 번째 td(종목명)가 있는지 확인
                     if len(cols) > 1:
                         stock_name = cols[1].text
-                        if stock_name: # 종목명이 비어있지 않으면 추가
+                        if stock_name: 
                             portfolio_data.append(stock_name)
 
                 if portfolio_data:
@@ -178,3 +197,4 @@ def run_scraper():
 # --- 스크립트 실행 ---
 if __name__ == "__main__":
     run_scraper()
+
