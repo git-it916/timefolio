@@ -9,7 +9,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException, NoSuchElementException
 from selenium.webdriver.common.action_chains import ActionChains
 
 # --- 설정 ---
@@ -19,6 +19,8 @@ USER_PW = "Tlstmdgns1!"
 DB_DIR = "database"
 BASE_NAME = "portfolio"      # 결과: portfolio_YYYYMMDD_1.csv ...
 RANKS_TO_SCRAPE = 20
+
+_num_pat = re.compile(r"-?\d+(?:\.\d+)?")
 
 def next_available_csv_path_by_date(db_dir: str, base_name: str) -> str:
     """같은 날짜(YYYYMMDD) 안에서 _1, _2 ...로 증가하는 파일 경로 생성"""
@@ -47,9 +49,35 @@ def _to_number_or_str(x: str):
     """'15.3%' -> 15.3 로 정규화. 숫자 없으면 빈문자열 유지"""
     if not x:
         return ""
-    # 소수점 포함 숫자 추출
-    m = re.search(r"-?\d+(?:\.\d+)?", x.replace(",", ""))
+    m = _num_pat.search(x.replace(",", ""))
     return float(m.group(0)) if m else ""
+
+def _smart_text(el) -> str:
+    """가능한 모든 경로로 텍스트를 최대한 확보"""
+    if el is None:
+        return ""
+    # 1) .text
+    t = (el.text or "").strip()
+    if t:
+        return t
+    # 2) 흔히 쓰이는 속성들
+    for attr in ("textContent", "innerText", "value", "aria-valuenow", "data-value"):
+        v = el.get_attribute(attr)
+        if v and v.strip():
+            return v.strip()
+    # 3) 자식 요소들(frozen/span/div)에만 값이 있을 수 있음
+    for sel in (".frozen", "span", "div"):
+        try:
+            child = el.find_element(By.CSS_SELECTOR, sel)
+            v = (child.get_attribute("textContent") or "").strip()
+            if v:
+                return v
+        except NoSuchElementException:
+            pass
+    # 4) 마지막 수단: innerHTML에서 숫자만 추출
+    html = el.get_attribute("innerHTML") or ""
+    hm = _num_pat.search(html.replace(",", ""))
+    return hm.group(0) if hm else ""
 
 def save_portfolio_csv(rank, user_nick, portfolio_rows):
     """
@@ -136,35 +164,44 @@ def run_scraper():
                 print(f" - 포트폴리오 헤더 '{user_nick}'님으로 변경 확인.")
 
                 # '전체 보유 종목' datagrid(2) 우선, 없으면 datagrid(1) fallback
-                body_xpath_2 = "(.//div[contains(@class, 'datagrid')])[2]//tbody/tr"
-                body_xpath_1 = "(.//div[contains(@class, 'datagrid')])[1]//tbody/tr"
-                stock_rows = modal.find_elements(By.XPATH, body_xpath_2)
-                if not stock_rows:
-                    print("  - datagrid[2] 미발견 → datagrid[1] 시도")
-                    stock_rows = modal.find_elements(By.XPATH, body_xpath_1)
+                grid_xpath_2 = "(.//div[contains(@class, 'datagrid')])[2]"
+                grid_xpath_1 = "(.//div[contains(@class, 'datagrid')])[1]"
 
+                grid_elems = modal.find_elements(By.XPATH, grid_xpath_2)
+                grid = grid_elems[0] if grid_elems else modal.find_element(By.XPATH, grid_xpath_1)
+
+                stock_rows = grid.find_elements(By.XPATH, ".//tbody/tr")
+                if not stock_rows:
+                    # 가상 렌더링 대비 잠깐 대기 후 재시도
+                    time.sleep(0.5)
+                    stock_rows = grid.find_elements(By.XPATH, ".//tbody/tr")
+                
                 portfolio_rows = []
                 for stock_row in stock_rows:
                     tds = stock_row.find_elements(By.TAG_NAME, "td")
                     if len(tds) < 2:
                         continue
 
-                    # 종목명: 2번째 td (prodNm)
-                    stock_name = tds[1].text.strip()
-
-                    # 비중: 6번째 td가 일반적이나, 더 견고하게 id에 '_wei' 포함 td를 우선 탐색
-                    weight_td = None
+                    # 종목명: _prodNm 우선, 없으면 2번째 td
                     try:
-                        weight_td = stock_row.find_element(By.XPATH, ".//td[contains(@id,'_wei')]")
-                    except Exception:
-                        # fallback: 6번째 td 인덱스(0-based 5)
-                        if len(tds) >= 6:
-                            weight_td = tds[5]
+                        name_td = stock_row.find_element(By.XPATH, ".//td[contains(@id,'_prodNm')]")
+                    except NoSuchElementException:
+                        name_td = tds[1]
+                    stock_name = _smart_text(name_td).strip()
+                    if not stock_name:
+                        continue
 
-                    weight_text = weight_td.text.strip() if weight_td else ""
+                    # 비중: _wei가 td/자식 어디에 있든 잡기 → 비면 6번째 td 폴백
+                    weight_text = ""
+                    try:
+                        wei_any = stock_row.find_element(By.XPATH, ".//*[contains(@id,'_wei')]")
+                        weight_text = _smart_text(wei_any).strip()
+                    except NoSuchElementException:
+                        pass
+                    if not weight_text and len(tds) >= 6:
+                        weight_text = _smart_text(tds[5]).strip()
 
-                    if stock_name:
-                        portfolio_rows.append((stock_name, weight_text))
+                    portfolio_rows.append((stock_name, weight_text))
 
                 if portfolio_rows:
                     save_portfolio_csv(current_rank, user_nick, portfolio_rows)
@@ -194,11 +231,17 @@ def run_scraper():
 
     except Exception as e:
         print(f"\n작업 중 오류가 발생했습니다: {e}")
-        driver.save_screenshot('final_error.png')
-        print("final_error.png 로 스크린샷 저장")
+        try:
+            driver.save_screenshot('final_error.png')
+            print("final_error.png 로 스크린샷 저장")
+        except Exception:
+            pass
 
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass
         print(f"\n모든 작업이 완료되었습니다. 브라우저를 종료합니다.\n저장 파일: {CSV_PATH}")
 
 if __name__ == "__main__":
