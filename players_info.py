@@ -18,7 +18,7 @@ USER_ID = "shinshunghun0916@gmail.com"
 USER_PW = "Tlstmdgns1!"
 DB_DIR = "database"
 BASE_NAME = "portfolio"      # 결과: portfolio_YYYYMMDD_1.csv ...
-RANKS_TO_SCRAPE = 20
+RANKS_TO_SCRAPE = 50
 
 _num_pat = re.compile(r"-?\d+(?:\.\d+)?")
 

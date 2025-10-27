@@ -54,7 +54,6 @@ def next_out_path_for_date(out_dir: str, base: str, ymd: str) -> str:
         m += 1
 
 def compare_two_paths(curr_path: str, prev_path: str):
-    # 현재/과거 파일명에서 현재 ymd를 뽑아 결과 파일명에 사용
     curr_info = parse_info(curr_path)
     if not curr_info:
         raise RuntimeError(f"현재 파일명 형식 오류: {curr_path}")
@@ -71,6 +70,10 @@ def compare_two_paths(curr_path: str, prev_path: str):
 
     rows = []
     for user, g in curr_grp:
+        # 🟡 변경된 부분: 과거에 존재하지 않던 user는 제외
+        if user not in prev_map:
+            continue
+
         curr_set = set(g["stock_name"])
         prev_set = prev_map.get(user, set())
         new_stocks = sorted(curr_set - prev_set)
@@ -110,14 +113,12 @@ def compare_manual_or_auto(curr_key: str | None, prev_key: str | None):
             raise RuntimeError(f"파일이 없습니다: {prev_path}")
         return compare_two_paths(curr_path, prev_path)
     else:
-        # 자동 모드
         ymd, prev_path, curr_path = pick_latest_two_files()
         print(f"[auto] latest date = {ymd}")
         return compare_two_paths(curr_path, prev_path)
 
 if __name__ == "__main__":
     try:
-        # 인터랙티브 입력 (Enter만 치면 자동 모드)
         curr_key = input("현재 파일 키 (예: 20251023_2) [엔터=자동]: ").strip()
         prev_key = input("과거 파일 키 (예: 20251023_1) [엔터=자동]: ").strip()
         curr_key = curr_key or None
