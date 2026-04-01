@@ -137,6 +137,8 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+reports/
+final_error.png
 .venv
 env/
 venv/
