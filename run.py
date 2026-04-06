@@ -24,8 +24,21 @@ def cmd_scrape() -> str:
 
 
 def cmd_analyze() -> None:
-    from timefolio.analyzer import run
-    run()
+    from timefolio.analyzer import (
+        analyze, analyze_top20_trades, list_snapshots,
+        print_report, print_top20_trades, save_report, signals_to_dataframe,
+    )
+    from timefolio.notifier import send_signal_report
+
+    snapshots = list_snapshots()
+    curr_path, prev_path = snapshots[-1][2], snapshots[-2][2]
+    signals = analyze(curr_path, prev_path)
+    trades = analyze_top20_trades(curr_path, prev_path)
+    print_report(signals)
+    print_top20_trades(trades)
+    report_path = save_report(signals_to_dataframe(signals))
+    print(f"\n>> 상세 리포트 저장: {report_path}")
+    send_signal_report(signals, trades)
 
 
 def cmd_list() -> None:
@@ -51,7 +64,7 @@ def cmd_all() -> None:
     if len(snapshots) >= 2:
         print()
         print("=" * 50)
-        print("  [2/2] 전략 분석 시작")
+        print("  [2/2] 전략 분석 + 텔레그램 전송")
         print("=" * 50)
         cmd_analyze()
     else:

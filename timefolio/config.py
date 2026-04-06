@@ -28,7 +28,16 @@ RANKS_TO_SCRAPE: int = 50
 WAIT_TIMEOUT: int = 30        # Selenium WebDriverWait 타임아웃(초)
 PAGE_LOAD_WAIT: float = 3.0   # 페이지 전환 후 대기(초)
 MODAL_CLOSE_WAIT: float = 1.0 # 모달 닫기 후 대기(초)
-HEADLESS: bool = False         # True → 브라우저 숨김 모드
+HEADLESS: bool = os.getenv("HEADLESS", "false").lower() in ("true", "1", "yes")
+
+# ── 텔레그램 ─────────────────────────────────────────
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ── 스케줄러 ─────────────────────────────────────────
+SCHEDULE_START_HOUR: int = int(os.getenv("SCHEDULE_START_HOUR", "8"))
+SCHEDULE_END_HOUR: int = int(os.getenv("SCHEDULE_END_HOUR", "18"))
+SCHEDULE_INTERVAL_MIN: int = int(os.getenv("SCHEDULE_INTERVAL_MIN", "30"))
 
 # ── 전략 파라미터 ─────────────────────────────────────
 TOP_TIER: int = 10             # 상위 10명 = "엘리트" 그룹

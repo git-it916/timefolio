@@ -2,3 +2,5 @@ selenium
 webdriver-manager
 pandas
 python-dotenv
+python-telegram-bot
+apscheduler

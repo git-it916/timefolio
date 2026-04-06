@@ -156,6 +156,54 @@ def _close_modal(driver, short_wait) -> None:
 
 # ── 단일 유저 스크래핑 ────────────────────────────────
 
+def _scroll_to_rank(driver, ranking_table, row_index: int) -> None:
+    """가상 스크롤 datagrid에서 특정 행이 보이도록 스크롤."""
+    tbody = ranking_table.find_element(By.TAG_NAME, "tbody")
+    rows = tbody.find_elements(By.XPATH, "./tr[starts-with(@style, 'position')]")
+    if not rows:
+        return
+
+    # 현재 보이는 행들의 rank 범위 확인
+    visible_ranks = []
+    for r in rows:
+        try:
+            rank_text = r.find_element(By.XPATH, ".//td[1]").text.strip()
+            if rank_text.isdigit():
+                visible_ranks.append(int(rank_text))
+        except Exception:
+            pass
+
+    target_rank = row_index + 1
+    if visible_ranks and target_rank in visible_ranks:
+        return  # 이미 보이는 상태
+
+    # datagrid의 스크롤 컨테이너를 찾아 스크롤
+    scroll_container = ranking_table.find_element(
+        By.CSS_SELECTOR, "div.datagrid-body, div.datagrid-view, .datagrid"
+    )
+    # 행 높이 추정 (보통 30~40px) × 목표 인덱스만큼 스크롤
+    scroll_y = row_index * 35
+    driver.execute_script(
+        "arguments[0].scrollTop = arguments[1];", scroll_container, scroll_y
+    )
+    time.sleep(0.5)
+
+
+def _find_row_by_rank(ranking_table, target_rank: int):
+    """가상 스크롤 테이블에서 순위 번호로 행을 찾는다."""
+    rows = ranking_table.find_elements(
+        By.XPATH, ".//tbody/tr[starts-with(@style, 'position')]"
+    )
+    for row in rows:
+        try:
+            rank_text = row.find_element(By.XPATH, ".//td[1]").text.strip()
+            if rank_text.isdigit() and int(rank_text) == target_rank:
+                return row
+        except Exception:
+            continue
+    return None
+
+
 def _scrape_one_user(
     driver, wait: WebDriverWait, ranking_table, row_index: int, csv_path: str,
     saved_ranks: set[int],
@@ -163,14 +211,21 @@ def _scrape_one_user(
     """한 명의 포트폴리오를 스크래핑. 성공 시 True 반환."""
     rank = row_index + 1
 
-    rows = ranking_table.find_elements(
-        By.XPATH, ".//tbody/tr[starts-with(@style, 'position')]"
-    )
-    if row_index >= len(rows):
-        log.warning("랭킹 행 부족 (index=%d, rows=%d). 스크래핑 종료.", row_index, len(rows))
-        return False
+    # 가상 스크롤: 해당 행이 보이도록 스크롤
+    _scroll_to_rank(driver, ranking_table, row_index)
 
-    target_row = rows[row_index]
+    # 순위 번호로 행을 찾기 (가상 스크롤에서는 index != DOM 위치)
+    target_row = _find_row_by_rank(ranking_table, rank)
+    if target_row is None:
+        # 폴백: 기존 index 기반 탐색
+        rows = ranking_table.find_elements(
+            By.XPATH, ".//tbody/tr[starts-with(@style, 'position')]"
+        )
+        if row_index >= len(rows):
+            log.warning("랭킹 행 부족 (rank=%d, rows=%d). 스크래핑 종료.", rank, len(rows))
+            return False
+        target_row = rows[row_index]
+
     user_nick = target_row.find_element(By.XPATH, ".//td[3]").text.strip()
 
     open_btn = target_row.find_element(By.XPATH, ".//button[text()='open']")

@@ -257,6 +257,52 @@ def analyze(curr_path: str, prev_path: str) -> list[StockSignal]:
 
 
 # ═══════════════════════════════════════════════════════
+#  TOP20 유저 매매 내역
+# ═══════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class UserTrade:
+    """개별 유저의 매매 변동."""
+    rank: int
+    user_nick: str
+    bought: tuple[str, ...]     # 신규 매수 종목
+    sold: tuple[str, ...]       # 매도(이탈) 종목
+
+
+def analyze_top20_trades(curr_path: str, prev_path: str) -> list[UserTrade]:
+    """TOP20 유저의 매수/매도 종목을 추출한다."""
+    curr_df = _read_snapshot(curr_path)
+    prev_df = _read_snapshot(prev_path)
+
+    # 현재 TOP20 유저 목록 (rank 기준)
+    curr_top20 = curr_df[curr_df["rank"] <= MID_TIER]
+    top20_users: dict[str, int] = {}
+    for _, row in curr_top20.iterrows():
+        rank = int(row["rank"]) if pd.notna(row["rank"]) else 999
+        nick = row["user_nick"]
+        if nick not in top20_users or rank < top20_users[nick]:
+            top20_users[nick] = rank
+
+    curr_user_stocks = _user_to_stocks(curr_df)
+    prev_user_stocks = _user_to_stocks(prev_df)
+
+    trades: list[UserTrade] = []
+    for nick, rank in sorted(top20_users.items(), key=lambda x: x[1]):
+        curr_stocks = curr_user_stocks.get(nick, set())
+        prev_stocks = prev_user_stocks.get(nick, set())
+
+        bought = tuple(sorted(curr_stocks - prev_stocks))
+        sold = tuple(sorted(prev_stocks - curr_stocks))
+
+        if bought or sold:
+            trades.append(UserTrade(
+                rank=rank, user_nick=nick, bought=bought, sold=sold,
+            ))
+
+    return trades
+
+
+# ═══════════════════════════════════════════════════════
 #  리포트 생성
 # ═══════════════════════════════════════════════════════
 
@@ -353,6 +399,24 @@ def print_report(signals: list[StockSignal]) -> None:
         pct = s.n_holders / RANKS_TO_SCRAPE * 100
         bar = "#" * int(pct / 5)
         print(f"  {i:2d}. {s.stock_name:12s}  {s.n_holders:2d}명 ({pct:4.1f}%) {bar}")
+
+    print("\n" + "=" * 70)
+
+
+def print_top20_trades(trades: list[UserTrade]) -> None:
+    """TOP20 유저 매매 내역을 콘솔에 출력한다."""
+    if not trades:
+        print("\n** TOP20 유저 매매 변동 없음 **")
+        return
+
+    print(f"\n** TOP20 유저 매매 내역 ({len(trades)}명 변동) **")
+    for t in trades:
+        parts = [f"  {t.rank:2d}위 {t.user_nick}"]
+        if t.bought:
+            parts.append(f"    + 매수: {', '.join(t.bought)}")
+        if t.sold:
+            parts.append(f"    - 매도: {', '.join(t.sold)}")
+        print("\n".join(parts))
 
     print("\n" + "=" * 70)
 
