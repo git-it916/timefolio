@@ -59,7 +59,10 @@ def _next_csv_path(db_dir: str, prefix: str) -> str:
 
 def _init_csv(path: str) -> None:
     with open(path, mode="w", newline="", encoding="utf-8-sig") as f:
-        csv.writer(f).writerow(["rank", "user_nick", "stock_name", "weight", "scraped_at"])
+        csv.writer(f).writerow([
+            "rank", "user_nick", "stock_code", "stock_name",
+            "tf_price", "weight", "scraped_at",
+        ])
     log.info("CSV 준비: %s", path)
 
 
@@ -100,15 +103,17 @@ def _smart_text(el) -> str:
 # ── 포트폴리오 저장 ───────────────────────────────────
 
 def _save_portfolio(csv_path: str, rank: int, user_nick: str,
-                    portfolio_rows: list[tuple[str, str]]) -> None:
+                    portfolio_rows: list[tuple[str, str, str, str]]) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
-    for stock_name, weight_text in portfolio_rows:
+    for stock_code, stock_name, price_text, weight_text in portfolio_rows:
         stock_name = (stock_name or "").strip()
         if not stock_name:
             continue
+        stock_code = (stock_code or "").strip()
+        price_val = _to_number((price_text or "").strip())
         weight_val = _to_number((weight_text or "").strip())
-        rows.append((rank, user_nick, stock_name, weight_val, now))
+        rows.append((rank, user_nick, stock_code, stock_name, price_val, weight_val, now))
 
     if not rows:
         log.warning("  %d위 %s — 저장할 종목 없음", rank, user_nick)
@@ -257,12 +262,22 @@ def _scrape_one_user(
         time.sleep(0.5)
         stock_rows = grid.find_elements(By.XPATH, ".//tbody/tr")
 
-    portfolio: list[tuple[str, str]] = []
+    portfolio: list[tuple[str, str, str, str]] = []
     for stock_row in stock_rows:
         tds = stock_row.find_elements(By.TAG_NAME, "td")
         if len(tds) < 2:
             continue
 
+        # 종목코드 (A005930 형식)
+        stock_code = ""
+        try:
+            code_td = stock_row.find_element(By.CSS_SELECTOR, "td[id$='_prodId']")
+            stock_code = _smart_text(code_td).strip()
+        except NoSuchElementException:
+            if tds:
+                stock_code = _smart_text(tds[0]).strip()
+
+        # 종목명
         try:
             name_td = stock_row.find_element(By.CSS_SELECTOR, "td[id$='_prodNm']")
         except NoSuchElementException:
@@ -271,6 +286,16 @@ def _scrape_one_user(
         if not stock_name:
             continue
 
+        # 현재가
+        price_text = ""
+        try:
+            price_td = stock_row.find_element(By.CSS_SELECTOR, "td[id$='_close']")
+            price_text = _smart_text(price_td).strip()
+        except NoSuchElementException:
+            if len(tds) >= 3:
+                price_text = _smart_text(tds[2]).strip()
+
+        # 비중
         weight_text = ""
         try:
             wei_td = stock_row.find_element(By.CSS_SELECTOR, "td[id$='_wei']")
@@ -279,7 +304,7 @@ def _scrape_one_user(
             if len(tds) >= 6:
                 weight_text = _smart_text(tds[5]).strip()
 
-        portfolio.append((stock_name, weight_text))
+        portfolio.append((stock_code, stock_name, price_text, weight_text))
 
     if portfolio:
         _save_portfolio(csv_path, rank, user_nick, portfolio)

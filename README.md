@@ -1,2 +1,1 @@
 # timefolio
-ㄴ

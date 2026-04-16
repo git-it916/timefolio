@@ -15,7 +15,7 @@ if os.environ.get("SSL_CERT_FILE") and not os.path.exists(os.environ["SSL_CERT_F
 
 import telegram
 
-from timefolio.analyzer import StockSignal, UserTrade
+from timefolio.analyzer import HiddenConviction, StockSignal, UserTrade
 from timefolio.config import (
     RANKS_TO_SCRAPE,
     TELEGRAM_BOT_TOKEN,
@@ -25,13 +25,26 @@ from timefolio.config import (
 
 log = logging.getLogger(__name__)
 
+_MD_SPECIAL = str.maketrans({
+    "_": "\\_", "*": "\\*", "[": "\\[", "]": "\\]",
+    "(": "\\(", ")": "\\)", "~": "\\~", "`": "\\`",
+    ">": "\\>", "#": "\\#", "+": "\\+", "-": "\\-",
+    "=": "\\=", "|": "\\|", "{": "\\{", "}": "\\}",
+    ".": "\\.", "!": "\\!",
+})
+
+
+def _esc(text: str) -> str:
+    """텔레그램 MarkdownV2 특수문자 이스케이프."""
+    return text.translate(_MD_SPECIAL)
+
 
 def _format_signal_message(signals: list[StockSignal]) -> str:
-    """시그널 리스트를 텔레그램 메시지 문자열로 변환."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    """시그널 리스트를 텔레그램 메시지 문자열로 변환 (MarkdownV2)."""
+    now = _esc(datetime.now().strftime("%Y-%m-%d %H:%M"))
     lines: list[str] = [
-        f"📊 *Timefolio 시그널 리포트*",
-        f"🕐 {now} | 상위 {RANKS_TO_SCRAPE}명 분석",
+        "📊 *Timefolio 시그널 리포트*",
+        f"🕐 {now} \\| 상위 {RANKS_TO_SCRAPE}명 분석",
         "",
     ]
 
@@ -47,21 +60,21 @@ def _format_signal_message(signals: list[StockSignal]) -> str:
         "NEUTRAL": "⚪ NEUTRAL",
     }
 
-    # STRONG_BUY, BUY, HOLD, CAUTION만 표시 (NEUTRAL은 종목이 너무 많으므로 개수만)
     for sig_type in ["STRONG_BUY", "BUY", "HOLD", "CAUTION"]:
         items = groups.get(sig_type, [])
         if not items:
             continue
 
-        lines.append(f"*{emoji_map[sig_type]}* ({len(items)}종목)")
+        lines.append(f"*{emoji_map[sig_type]}* \\({len(items)}종목\\)")
         for s in items:
             momentum_icon = "↑" if s.momentum > 0 else ("↓" if s.momentum < 0 else "→")
+            name = _esc(s.stock_name)
             lines.append(
-                f"  `{s.stock_name:10s}` "
-                f"점수:{s.score:5.1f} "
-                f"보유:{s.n_holders}명 "
-                f"T{TOP_TIER}:{s.top_tier_holders} "
-                f"{momentum_icon}{abs(s.momentum)}"
+                f"  {name}"
+                f"  점수:{_esc(f'{s.score:.1f}')}"
+                f"  보유:{s.n_holders}명"
+                f"  T{TOP_TIER}:{s.top_tier_holders}"
+                f"  {momentum_icon}{abs(s.momentum)}"
             )
         lines.append("")
 
@@ -70,18 +83,18 @@ def _format_signal_message(signals: list[StockSignal]) -> str:
         lines.append(f"*{emoji_map['NEUTRAL']}* {neutral_count}종목")
         lines.append("")
 
-    # 컨센서스 Top 10
     top10 = sorted(signals, key=lambda s: -s.n_holders)[:10]
     lines.append("*📈 컨센서스 Top 10*")
     for i, s in enumerate(top10, 1):
         pct = s.n_holders / RANKS_TO_SCRAPE * 100
-        lines.append(f"  {i}. {s.stock_name} -- {s.n_holders}명({pct:.0f}%)")
+        name = _esc(s.stock_name)
+        lines.append(f"  {i}\\. {name} \\- {s.n_holders}명\\({pct:.0f}%\\)")
 
     return "\n".join(lines)
 
 
 def _format_trades_message(trades: list[UserTrade]) -> str:
-    """TOP20 유저 매매 내역을 텔레그램 메시지로 변환."""
+    """TOP20 유저 매매 내역을 텔레그램 메시지로 변환 (MarkdownV2)."""
     if not trades:
         return ""
 
@@ -93,31 +106,60 @@ def _format_trades_message(trades: list[UserTrade]) -> str:
     for t in trades:
         parts: list[str] = []
         if t.bought:
-            parts.append(f"+{', '.join(t.bought)}")
+            parts.append(f"\\+{_esc(', '.join(t.bought))}")
         if t.sold:
-            parts.append(f"-{', '.join(t.sold)}")
-        lines.append(f"  `{t.rank:2d}위` {t.user_nick}: {' / '.join(parts)}")
+            parts.append(f"\\-{_esc(', '.join(t.sold))}")
+        nick = _esc(t.user_nick)
+        lines.append(f"  {t.rank}위 {nick}: {' / '.join(parts)}")
+
+    return "\n".join(lines)
+
+
+def _format_hidden_message(hiddens: list[HiddenConviction]) -> str:
+    """히든 확신 종목을 텔레그램 메시지로 변환 (MarkdownV2). 평균비중 10%+ 만."""
+    top_hiddens = [h for h in hiddens if h.avg_weight >= 10.0]
+    if not top_hiddens:
+        return ""
+
+    lines: list[str] = [
+        "",
+        f"*🔍 히든 확신 종목*",
+        "",
+    ]
+    for h in top_hiddens:
+        name = _esc(h.stock_name)
+        n = len(h.holders)
+        best_rank = h.holders[0][0]
+        # 보유자 요약: "2위 외 1명" 또는 "5위"
+        if n == 1:
+            who = f"{best_rank}위 {_esc(h.holders[0][1])}"
+        else:
+            who = f"{best_rank}위 외 {n - 1}명"
+        lines.append(
+            f"  *{name}* {_esc(f'{h.avg_weight}%')} \\| {who}"
+        )
 
     return "\n".join(lines)
 
 
 def _format_scrape_only_message(csv_path: str) -> str:
-    """스크래핑만 완료된 경우의 메시지."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    """스크래핑만 완료된 경우의 메시지 (MarkdownV2)."""
+    now = _esc(datetime.now().strftime("%Y-%m-%d %H:%M"))
     return (
         f"📥 *스크래핑 완료*\n"
         f"🕐 {now}\n"
-        f"스냅샷이 1개뿐이어서 비교 분석은 다음 실행 시 진행됩니다."
+        f"스냅샷이 1개뿐이어서 비교 분석은 다음 실행 시 진행됩니다\\."
     )
 
 
 def _format_error_message(error: Exception) -> str:
-    """에러 발생 시 메시지."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    """에러 발생 시 메시지 (MarkdownV2)."""
+    now = _esc(datetime.now().strftime("%Y-%m-%d %H:%M"))
+    err_text = _esc(f"{type(error).__name__}: {error}")
     return (
         f"❌ *실행 오류*\n"
         f"🕐 {now}\n"
-        f"`{type(error).__name__}: {error}`"
+        f"`{err_text}`"
     )
 
 
@@ -131,7 +173,7 @@ async def _send_telegram(text: str) -> None:
     await bot.send_message(
         chat_id=TELEGRAM_CHAT_ID,
         text=text,
-        parse_mode=telegram.constants.ParseMode.MARKDOWN,
+        parse_mode=telegram.constants.ParseMode.MARKDOWN_V2,
     )
     log.info("텔레그램 메시지 전송 완료")
 
@@ -139,6 +181,7 @@ async def _send_telegram(text: str) -> None:
 def send_signal_report(
     signals: list[StockSignal],
     trades: list[UserTrade] | None = None,
+    hiddens: list[HiddenConviction] | None = None,
 ) -> None:
     """분석 결과를 텔레그램으로 전송 (동기 래퍼)."""
     import asyncio
@@ -146,6 +189,8 @@ def send_signal_report(
     text = _format_signal_message(signals)
     if trades:
         text += _format_trades_message(trades)
+    if hiddens:
+        text += _format_hidden_message(hiddens)
     asyncio.run(_send_telegram(text))
 
 

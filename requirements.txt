@@ -4,3 +4,4 @@ pandas
 python-dotenv
 python-telegram-bot
 apscheduler
+requests

@@ -77,6 +77,10 @@ def _read_snapshot(path: str) -> pd.DataFrame:
         dtype={"rank": "Int64", "user_nick": str, "stock_name": str},
         encoding="utf-8-sig",
     )
+    # 신규 컬럼이 없는 구형 CSV 하위호환
+    for col in ("stock_code", "tf_price"):
+        if col not in df.columns:
+            df[col] = ""
     for col in ("user_nick", "stock_name"):
         df[col] = df[col].fillna("").astype(str).str.strip()
     df = df[(df["user_nick"] != "") & (df["stock_name"] != "")]
@@ -303,6 +307,60 @@ def analyze_top20_trades(curr_path: str, prev_path: str) -> list[UserTrade]:
 
 
 # ═══════════════════════════════════════════════════════
+#  히든 확신 종목 (소수 상위권만 보유)
+# ═══════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class HiddenConviction:
+    """소수 상위권 유저만 보유하는 확신 종목."""
+    stock_name: str
+    holders: tuple[tuple[int, str, float], ...]  # (rank, nick, weight)
+    avg_weight: float
+    max_rank: int  # 가장 높은 순위 (낮은 숫자)
+
+
+def find_hidden_convictions(
+    curr_path: str,
+    max_holders: int = 3,
+    min_rank: int = MID_TIER,
+) -> list[HiddenConviction]:
+    """보유자 1~max_holders명 + TOP min_rank 이내 유저가 보유한 종목을 추출."""
+    df = _read_snapshot(curr_path)
+
+    stock_holders: dict[str, list[tuple[int, str, float]]] = {}
+    for _, row in df.iterrows():
+        rank = int(row["rank"]) if pd.notna(row["rank"]) else 999
+        weight = float(row.get("weight", 0) or 0)
+        stock_holders.setdefault(row["stock_name"], []).append(
+            (rank, row["user_nick"], weight)
+        )
+
+    results: list[HiddenConviction] = []
+    for stock, holders in stock_holders.items():
+        if len(holders) > max_holders:
+            continue
+        # TOP min_rank 이내 유저가 1명이라도 있어야 함
+        top_holders = [h for h in holders if h[0] <= min_rank]
+        if not top_holders:
+            continue
+
+        holders_sorted = sorted(holders, key=lambda h: h[0])
+        weights = [h[2] for h in holders]
+        avg_w = sum(weights) / len(weights) if weights else 0.0
+
+        results.append(HiddenConviction(
+            stock_name=stock,
+            holders=tuple(holders_sorted),
+            avg_weight=round(avg_w, 1),
+            max_rank=holders_sorted[0][0],
+        ))
+
+    # 최고 순위 → 평균 비중 순으로 정렬
+    results.sort(key=lambda h: (h.max_rank, -h.avg_weight))
+    return results
+
+
+# ═══════════════════════════════════════════════════════
 #  리포트 생성
 # ═══════════════════════════════════════════════════════
 
@@ -417,6 +475,22 @@ def print_top20_trades(trades: list[UserTrade]) -> None:
         if t.sold:
             parts.append(f"    - 매도: {', '.join(t.sold)}")
         print("\n".join(parts))
+
+    print("\n" + "=" * 70)
+
+
+def print_hidden_convictions(hiddens: list[HiddenConviction]) -> None:
+    """히든 확신 종목을 콘솔에 출력한다."""
+    if not hiddens:
+        print("\n** 히든 확신 종목 없음 **")
+        return
+
+    print(f"\n** 히든 확신 종목 ({len(hiddens)}개) - 소수 상위권만 보유 **")
+    for h in hiddens:
+        holder_str = ", ".join(
+            f"{rank}위 {nick}({w}%)" for rank, nick, w in h.holders
+        )
+        print(f"  {h.stock_name:12s}  평균비중:{h.avg_weight}%  [{holder_str}]")
 
     print("\n" + "=" * 70)
 

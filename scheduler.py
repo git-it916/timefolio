@@ -28,7 +28,9 @@ def job() -> None:
     from timefolio.analyzer import (
         analyze,
         analyze_top20_trades,
+        find_hidden_convictions,
         list_snapshots,
+        print_hidden_convictions,
         print_report,
         print_top20_trades,
         save_report,
@@ -55,13 +57,15 @@ def job() -> None:
         curr_path, prev_path = snapshots[-1][2], snapshots[-2][2]
         signals = analyze(curr_path, prev_path)
         trades = analyze_top20_trades(curr_path, prev_path)
+        hiddens = find_hidden_convictions(curr_path)
         print_report(signals)
         print_top20_trades(trades)
+        print_hidden_convictions(hiddens)
 
         report_path = save_report(signals_to_dataframe(signals))
         log.info("리포트 저장: %s", report_path)
 
-        send_signal_report(signals, trades)
+        send_signal_report(signals, trades, hiddens)
         log.info("텔레그램 전송 완료")
 
     except Exception as e:
